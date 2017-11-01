@@ -30,6 +30,93 @@ static struct class *cl;                            // Global variable for the d
 
 
 
+//************************************RSA FUNCTIONS**************************************************
+
+
+
+static unsigned short pows (unsigned short x,unsigned short y,unsigned short z)   //modular exponenetiation function
+{
+ unsigned short i=1;
+ long pro=x;
+ for(;i<y;i++)
+    {
+        pro=pro*x;
+        pro=pro%z;
+    }
+ return (unsigned short)pro;
+}
+
+static void encryption (char *buffer, int *size, unsigned short *encrypted)
+{
+        
+    int i;
+    unsigned short e,n;
+    e = 3;
+    n = 64507;   
+    
+    
+    if ((*size)%2 == 1)
+        {
+            buffer[(*size)] = 32;
+            (*size)++;   
+        }    
+
+    for(i = 0; i <= ((*size)/2); i +=2)
+    {
+        char t;
+        t = buffer[i];
+        buffer[i] = buffer[i+1];
+        buffer[i+1] = t;
+    }
+    
+    unsigned short *pt = (unsigned short *) buffer;
+    unsigned short c;
+    
+    for(i=0;i<(*size)/2;i++)
+    {   
+        c = pows(pt[i], e,n); 
+        encrypted[i]=c;
+    }    
+    
+
+    return;
+}
+
+static void decryption (char *buffer, int *size, unsigned short *decrypted)
+{
+    int i;
+    unsigned short d,n;
+    d = 42600;
+    n = 64507;
+      
+
+    unsigned short * pt = (unsigned short*) buffer;
+    unsigned short m;
+
+    for(i=0;i<(*size)/2;i++)
+    { 
+        m = pows(pt[i], d,n);
+        decrypted[i]=m;
+    }
+    char * dbuffer = (char*) decrypted;
+    for(i = 0; i <= ( (*size) /2); i +=2)
+    {
+        char t;
+        t = dbuffer[i];
+        dbuffer[i] = dbuffer[i+1];
+        dbuffer[i+1] = t;
+    }
+
+    return;
+}
+
+
+
+
+
+
+//***************************************************************************************************
+
 // Functions for virtual character interface
 
 
@@ -37,7 +124,7 @@ struct v_dev                         // Structure which serves as the private da
 {
  
  unsigned long size;                     /* amount of data stored here */
- void *data;                             //pointer to data area
+ char *data;                             // pointer to data area
  struct cdev c_dev;                           // Global variable for the character device structure
 
 };
@@ -77,6 +164,7 @@ static int v_close(struct inode *i, struct file *f)
 static ssize_t v_read(struct file *f, char __user *buf, size_t len, loff_t *off)
 {
   struct v_dev *dev = f->private_data;
+  int i;
 
   printk(KERN_INFO "Driver: read() ,len = %d , off = %d ,size = %d \n",len , *off, dev->size);
 
@@ -90,7 +178,16 @@ static ssize_t v_read(struct file *f, char __user *buf, size_t len, loff_t *off)
   	len = dev->size - *off;
   }
 
-  if (copy_to_user(buf,dev->data + *off,len))
+  for (i = 0; i < len; i++)
+  {
+  	bulk_buf[i] = dev->data[*off + i];
+  }
+
+  unsigned short decrypted[ (len+1) / 2];
+  decryption(bulk_buf,(int*) &len, decrypted);
+  char *dbuffer = (char*) decrypted;
+
+  if (copy_to_user(buf,dbuffer,len))
   {
   	return -EFAULT;
   }
@@ -104,6 +201,7 @@ static ssize_t v_write(struct file *f, const char __user *buf, size_t len, loff_
 {
   
   struct v_dev *dev = f->private_data;
+  int i = 0;
   printk(KERN_INFO "Driver: write() ,len = %d , off = %d ,size = %d \n",len , *off, dev->size);
 
   if(*off + len >= 4096)
@@ -111,9 +209,19 @@ static ssize_t v_write(struct file *f, const char __user *buf, size_t len, loff_
   	return 0;
   }
 
-  if (copy_from_user(dev->data + *off, buf, len))
+  if (copy_from_user(bulk_buf, buf, len))
   {
   	return -EFAULT;
+  }
+
+  unsigned short encrypted[(len+1)/2];
+
+  encryption(bulk_buf,(int*) &len, encrypted);
+  char* ebuffer = (char*) encrypted;
+
+  for(i = 0; i < len; i++)
+  {
+  	dev->data[*off + i] = ebuffer[i];
   }
 
   *off += len;                              // updating offset and count;
