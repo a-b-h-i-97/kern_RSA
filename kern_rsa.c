@@ -8,7 +8,11 @@
 #include <linux/kref.h>
 #include <linux/uaccess.h>
 #include <linux/usb.h>
-#include <linux/mutex.h>
+#include <linux/types.h>
+#include <linux/kdev_t.h>
+#include <linux/fs.h>
+#include <linux/device.h>
+#include <linux/cdev.h>
 
 
 #define MIN(a,b) (((a) <= (b)) ? (a) : (b))
@@ -19,6 +23,118 @@
 static struct usb_device *device;
 static unsigned char bulk_buf[MAX_PKT_SIZE];                      //static buffer for storing data for read and write 
 
+
+static dev_t first;                                 // Global variable for the first device number
+
+static struct class *cl;                            // Global variable for the device class
+
+
+
+// Functions for virtual character interface
+
+
+struct v_dev                         // Structure which serves as the private data in file pointer
+{
+ 
+ unsigned long size;                     /* amount of data stored here */
+ void *data;                             //pointer to data area
+ struct cdev c_dev;                           // Global variable for the character device structure
+
+};
+
+
+static struct v_dev dev;
+
+
+
+static int v_open(struct inode *i, struct file *f)
+{
+  
+  struct v_dev *dev; 
+  printk(KERN_INFO "Driver: open()\n");
+
+  dev = container_of(i->i_cdev, struct v_dev, c_dev);
+
+  if ( (f->f_flags & O_ACCMODE) == O_WRONLY)        //if write only file is truncated
+  {
+  	dev->size = 0;
+  	f->f_pos = 0;
+  }
+  
+  
+
+  f->private_data = dev;
+
+
+  return 0;
+}
+
+static int v_close(struct inode *i, struct file *f)
+{
+  printk(KERN_INFO "Driver: close()\n");
+  return 0;
+}
+static ssize_t v_read(struct file *f, char __user *buf, size_t len, loff_t *off)
+{
+  struct v_dev *dev = f->private_data;
+
+  printk(KERN_INFO "Driver: read() ,len = %d , off = %d ,size = %d \n",len , *off, dev->size);
+
+  if(*off >= dev->size)                 //reached the end of file
+  {
+  	return 0;
+  }
+
+  if (*off + len > dev->size)
+  {
+  	len = dev->size - *off;
+  }
+
+  if (copy_to_user(buf,dev->data + *off,len))
+  {
+  	return -EFAULT;
+  }
+
+  *off += len;                          //updating offset
+
+  return len;
+}
+
+static ssize_t v_write(struct file *f, const char __user *buf, size_t len, loff_t *off)
+{
+  
+  struct v_dev *dev = f->private_data;
+  printk(KERN_INFO "Driver: write() ,len = %d , off = %d ,size = %d \n",len , *off, dev->size);
+
+  if(*off + len >= 4096)
+  {
+  	return 0;
+  }
+
+  if (copy_from_user(dev->data + *off, buf, len))
+  {
+  	return -EFAULT;
+  }
+
+  *off += len;                              // updating offset and count;
+  if (dev->size < *off)
+  	dev->size = *off;
+
+
+  return len;
+}
+
+static struct file_operations v_fops =
+{
+  .owner = THIS_MODULE,
+  .open = v_open,
+  .release = v_close,
+  .read = v_read,
+  .write = v_write
+};
+
+
+//Functions for USB interface with USB subsystem
 
 
 
@@ -105,11 +221,71 @@ static int flash_probe(struct usb_interface *interface, const struct usb_device_
     }
     else
     {
-        printk(KERN_INFO "Minor obtained: %d\n", interface->minor);
+        //printk(KERN_INFO "Minor obtained: %d\n", interface->minor);
         printk(KERN_INFO "");
     }
+
+
+    // Setting up Virtual Character Interface
  
-    return retval;
+    
+    printk(KERN_INFO "Setting up Virtual Character Interface");
+    printk(KERN_INFO "");
+  
+  	if (alloc_chrdev_region(&first, 0, 1, "kern_rsa_USB") < 0)
+   
+    {
+    	printk(KERN_ERR "Chardev region could not be allocated");
+    	printk(KERN_INFO "");
+    	return -1;
+    }
+
+
+    if ((cl = class_create(THIS_MODULE, "rsa_usb")) == NULL)
+  	{
+  		printk(KERN_ERR "Class create failed");
+    	printk(KERN_INFO "");
+    	unregister_chrdev_region(first, 1);
+    	return -1;
+  	}
+
+    if (device_create(cl, NULL, first, NULL, "usb0") == NULL)
+  	{
+  		printk(KERN_ERR "Device create failed");
+    	printk(KERN_INFO "");
+    	class_destroy(cl);
+    	unregister_chrdev_region(first, 1);
+    	return -1;
+  	}
+
+  	dev.size = 0;
+  	dev.data = NULL;
+  	dev.data = kmalloc(4096,GFP_KERNEL);
+	
+  	if (dev.data == NULL)
+  	{
+  		printk(KERN_ERR "Error. Data memory not available");
+  		printk(KERN_INFO "");
+	
+  		return -1;
+	
+  	}
+
+    
+    cdev_init(&(dev.c_dev), &v_fops);
+    if (cdev_add(&(dev.c_dev), first, 1) == -1)
+  	{
+    	device_destroy(cl, first);
+    	class_destroy(cl);
+    	unregister_chrdev_region(first, 1);
+    	return -1;
+  	}
+
+
+  	printk(KERN_INFO "sys class location : /sys/clas/rsa_usb");
+  	printk(KERN_INFO "device location : /dev/usb0");
+    printk(KERN_INFO "");
+
 
     return 0;
 }
@@ -119,7 +295,20 @@ static void flash_disconnect(struct usb_interface *interface)
     printk(KERN_INFO "Pen drive removed\n");
     printk(KERN_INFO "");
 
+
+  	printk(KERN_INFO "Deregistering Virtual Character Interface");
+    printk(KERN_INFO "");
+
     usb_deregister_dev(interface,&pen_class);
+
+    //deregistering virtual interface
+
+    kfree(dev.data);
+
+    cdev_del(&(dev.c_dev));
+    device_destroy(cl, first);
+ 	class_destroy(cl);
+ 	unregister_chrdev_region(first, 1);
 }
  
 static struct usb_device_id pen_table[] =
@@ -153,7 +342,8 @@ static int __init kern_rsa_init(void)
     	return -1;
     }
 
-    return 0;
+
+  	return 0;
 }
  
 static void __exit kern_rsa_exit(void) 
@@ -161,6 +351,7 @@ static void __exit kern_rsa_exit(void)
     printk(KERN_INFO "kern_rsa Uninitialized");
     printk(KERN_INFO "");
     usb_deregister(&pen_driver);
+    
 }
  
 module_init(kern_rsa_init);
