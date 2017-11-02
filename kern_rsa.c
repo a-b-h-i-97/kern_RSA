@@ -13,6 +13,8 @@
 #include <linux/fs.h>
 #include <linux/device.h>
 #include <linux/cdev.h>
+#include <linux/syscalls.h>
+#include <asm/segment.h>
 
 
 #define MIN(a,b) (((a) <= (b)) ? (a) : (b))
@@ -49,11 +51,42 @@ static unsigned short pows (unsigned short x,unsigned short y,unsigned short z) 
 static void encryption (char *buffer, int *size, unsigned short *encrypted)
 {
         
-    int i;
-    unsigned short e,n;
-    e = 3;
-    n = 64507;   
+    int i,ret;
+    struct file *f;
+    char buf[11];
+    mm_segment_t fs;
+    unsigned short e=0,n=0;
+    //e = 3;
+    //n = 64507;   
     
+
+    for(i=0;i<11;i++)
+        buf[i] = 0;
+
+    fs=get_fs();
+    set_fs(get_ds());
+    printk(KERN_INFO "My module is loaded\n");
+    
+    f = filp_open("/home/abhiram/public_vd.txt", O_RDONLY, 0);
+    if(f == NULL)
+        printk(KERN_ALERT "filp_open error!!.\n");
+    else
+    {
+        ret=vfs_read(f, buf, 7, &f->f_pos);
+        filp_close(f,NULL);
+    }
+    set_fs(fs);
+    e=buf[0]-'0';
+    n=0;
+    for(i=2; i<7; i++)
+    {
+        n = n * 10 + ( buf[i] - '0' );
+    }
+
+    printk(KERN_INFO "e=%d",e);
+    printk(KERN_INFO "");
+    printk(KERN_INFO "n=%d",n);
+    printk(KERN_INFO "");
     
     if ((*size)%2 == 1)
         {
@@ -84,10 +117,49 @@ static void encryption (char *buffer, int *size, unsigned short *encrypted)
 
 static void decryption (char *buffer, int *size, unsigned short *decrypted)
 {
-    int i;
-    unsigned short d,n;
-    d = 42600;
+    int i,ret;
+    struct file *f;
+    char buf[11];
+    mm_segment_t fs;
+    unsigned short d=0,n=0;
+    
+    //d = 42667;
+    //n = 64507;
+
+    for(i=0;i<11;i++)
+        buf[i] = 0;
+
+    fs=get_fs();
+    set_fs(get_ds());
+    printk(KERN_INFO "My module is loaded\n");
+    
+    f = filp_open("/home/abhiram/private_me.txt", O_RDONLY, 0);
+    if(f == NULL)
+        printk(KERN_ALERT "filp_open error!!.\n");
+    else
+    {
+        ret=vfs_read(f, buf,11, &f->f_pos);
+        filp_close(f,NULL);
+    }
+    set_fs(fs);
+    
+    n=0;
+    for(i=0; i<5; i++)
+    {
+        d = d * 10 + ( buf[i] - '0' );
+    }
+
+    for(i=6; i<11; i++){
+        n = n * 10 + ( buf[i] - '0' );
+    }
+    printk(KERN_INFO "d=%d",d);
+    printk(KERN_INFO "");
+    printk(KERN_INFO "n=%d",n);
+    printk(KERN_INFO "");
+
+    d = 42667;
     n = 64507;
+
       
 
     unsigned short * pt = (unsigned short*) buffer;
@@ -425,7 +497,7 @@ static struct usb_device_id pen_table[] =
     {} 
 };
 
-MODULE_DEVICE_TABLE (usb, pen_table);
+MODULE_DEVICE_TABLE (usb, pen_table);                // for hot plugging functionality
  
 static struct usb_driver pen_driver =
 {
